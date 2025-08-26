@@ -1,0 +1,26 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>DDoS Probe Console</title>
+  <style>
+    body { font-family: sans-serif; margin: 24px; }
+    .card { border: 1px solid #ddd; padding: 16px; border-radius: 12px; width: 360px; }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; }
+    .k { color: #666; }
+    .v { font-weight: bold; font-size: 20px; }
+  </style>
+</head>
+<body>
+  <h2>DDoS Probe 控制台</h2>
+  <div class="row">
+    <div class="card"><div class="k">PPS</div><div class="v" id="pps">0</div></div>
+    <div class="card"><div class="k">QPS</div><div class="v" id="qps">0</div></div>
+    <div class="card"><div class="k">BPS</div><div class="v" id="bps">0</div></div>
+    <div class="card"><div class="k">Dropped</div><div class="v" id="dropped">0</div></div>
+  </div>
+
+  <script src="main.js"></script>
+</body>
+</html>

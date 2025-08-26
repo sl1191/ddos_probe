@@ -1,0 +1,44 @@
+[package]
+name = "ddos_probe"
+version = "0.1.0"
+edition = "2021"
+
+# 特性开关：开发用pcap，生产用AF_XDP
+[features]
+default = ["pcap"]  # 默认开发环境（启用pcap抓包）
+pcap = ["dep:pcap"]  # pcap抓包特性（依赖pcap库）
+af_xdp = ["dep:afxdp"]  # AF_XDP抓包特性（依赖afxdp库，生产环境用）
+
+[dependencies]
+# === 异步运行时 ===
+tokio = { version = "1.47.1", features = ["full"] }  # 异步运行时核心（含任务调度、定时器等）
+
+# === Web框架与网络 ===
+axum = { version = "0.8.4", features = ["default", "ws"] }  # WebSocket服务（指标推送）
+hyper = { version = "1.7.0", features = ["full"] }  # HTTP底层库（axum依赖）
+
+# === 序列化与数据格式 ===
+serde = { version = "1.0.219", features = ["derive"] }  # 数据序列化（结构体转JSON）
+serde_json = "1.0.143"  # JSON格式处理（WebSocket消息生成）
+
+# === 并发与数据结构 ===
+arc-swap = "1.7.1"  # 原子化Arc切换（规则引擎动态更新）
+dashmap = "5.5.3"  # 并发HashMap（流量统计临时存储）
+parking_lot = "0.12.1"  # 高性能锁（可选，替换标准库Mutex）
+
+# === 日志与调试 ===
+tracing = "0.1.41"  # 日志抽象层
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }  # 日志输出实现（控制台打印+环境变量过滤）
+
+# === 数据包解析 ===
+etherparse = "0.19.0"  # L2-L4协议解析（提取五元组）
+
+# === 错误处理 ===
+anyhow = "1.0.99"  # 简化错误处理（main函数返回Result）
+
+# === 工具库 ===
+rand = "0.9.2"  # 随机数生成（模拟探测任务）
+
+# === 抓包驱动（可选依赖，按特性启用）===
+pcap = { version = "2.3.0", optional = true }  # pcap抓包（开发环境，跨平台）
+afxdp = { version = "0.4.0", optional = true }  # AF_XDP抓包（生产环境，Linux零拷贝，需内核5.4+）

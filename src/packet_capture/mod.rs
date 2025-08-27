@@ -11,7 +11,7 @@ pub trait Capture {
         Self: Sized;
 
     /// 批量捕获数据包并更新指标
-    fn poll_batch(&mut self, metrics: &Metrics) -> io::Result<usize>;
+    fn poll_batch(&mut self, metrics: &Metrics,capture_ports_owned: &Vec<u16>,) -> io::Result<usize>;
 }
 
 // ===== 开发环境：pcap抓包实现（需启用"pcap"特性）=====
@@ -19,6 +19,8 @@ pub trait Capture {
 pub mod pcap {
     use super::*;
     use ::pcap::{Capture, Error};
+    use tracing::error;
+    use tracing::log::warn;
 
     /// pcap抓包器（基于libpcap/npcap内核驱动，跨平台兼容）
     /// 适合开发调试，支持Linux/macOS/Windows，性能满足中小流量场景（<1Gbps）
@@ -55,8 +57,9 @@ pub mod pcap {
             Ok(Self { driver: capture })
         }
 
-        fn poll_batch(&mut self, metrics: &Metrics) -> io::Result<usize> {
+        fn poll_batch(&mut self, metrics: &Metrics,capture_ports_owned: &Vec<u16>,) -> io::Result<usize> {
             let mut count = 0;
+            let mut consecutive_timeouts = 0;
             for _ in 0..100 {
                 match self.driver.next_packet() {
                     Ok(packet) => {
@@ -71,8 +74,15 @@ pub mod pcap {
                             }
                         }
                     }
+                    Err(::pcap::Error::TimeoutExpired) => break,
                     Err(::pcap::Error::NoMorePackets) => break,
-                    Err(e) => return Err(io::Error::new(io::ErrorKind::Other, format!("pcap捕获错误: {}", e))),
+                    Err(e) => {
+                        error!("pcap捕获失败: {}", e);
+                        return Err(io::Error::new(
+                            io::ErrorKind::Other,
+                            format!("pcap捕获错误: {}", e),
+                        ));
+                    },
                 }
             }
             Ok(count)

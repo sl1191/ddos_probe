@@ -31,9 +31,9 @@ pub mod pcap {
         fn new(iface: &str, capture_ports: &[u16]) -> io::Result<Self> {
             let mut capture = ::pcap::Capture::from_device(iface)
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("pcap设备初始化失败: {}", e)))?
-                .promisc(true)       // 混杂模式
+                .promisc(true)       // 启用混杂模式
                 .snaplen(1500)       // 捕获长度限制
-                .timeout(1000)       // 超时时间
+                .timeout(1000)       // 设置超时时间为1秒
                 .open()
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("打开设备失败: {}", e)))?
                 .setnonblock()
@@ -47,7 +47,6 @@ pub mod pcap {
                     .collect::<Vec<_>>()
                     .join(" or ");
 
-                // 调用 set_filter 方法时，确保 capture 是可变引用
                 capture
                     .filter(&filter, true)
                     .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("设置BPF过滤器失败: {}", e)))?;
@@ -56,7 +55,6 @@ pub mod pcap {
             Ok(Self { driver: capture })
         }
 
-        /** 批量捕获数据包并更新指标（单次最多100个包） */
         fn poll_batch(&mut self, metrics: &Metrics) -> io::Result<usize> {
             let mut count = 0;
             for _ in 0..100 {
@@ -73,7 +71,7 @@ pub mod pcap {
                             }
                         }
                     }
-                    Err(Error::NoMorePackets) => break,
+                    Err(::pcap::Error::NoMorePackets) => break,
                     Err(e) => return Err(io::Error::new(io::ErrorKind::Other, format!("pcap捕获错误: {}", e))),
                 }
             }
@@ -104,10 +102,10 @@ pub mod af_xdp {
                 .umem_size(32 * 1024 * 1024); // 32MB共享内存
 
             let socket = Socket::new(&config)?;
-            
+
             // 将端口数组转换为HashSet，方便快速查找
             let ports_set: HashSet<u16> = capture_ports.iter().cloned().collect();
-            
+
             Ok(Self {
                 socket,
                 buffer: vec![0; 1500],
@@ -124,7 +122,7 @@ pub mod af_xdp {
                         // 解析L3/L4信息
                         let packet_len = packet.len();
                         let data = &self.buffer[..packet_len];
-                        
+
                         // 检查是否需要端口过滤
                         if self.capture_ports.is_empty() {
                             // 没有指定端口，所有数据包都计数
@@ -146,7 +144,7 @@ pub mod af_xdp {
                                 metrics.qps.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             }
                         }
-                        
+
                         self.socket.release_rx_buffer(packet.desc())?;
                     }
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,

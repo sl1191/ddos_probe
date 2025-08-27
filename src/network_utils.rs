@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use pcap::Device;
+use tracing::{error, info, warn};
 
 /// 网络接口信息
 #[derive(Debug)]
@@ -43,8 +44,10 @@ pub fn scan_interfaces() -> HashMap<String, InterfaceInfo> {
 /// 根据目标IP选择合适的网卡
 pub fn select_interface(target_ip: IpAddr, interfaces: &HashMap<String, InterfaceInfo>) -> Option<String> {
     for (name, info) in interfaces {
+
         for ip in &info.ips {
             if is_in_same_subnet(target_ip, *ip) {
+                warn!("选择网卡: {:?}", name);
                 return Some(name.clone());
             }
         }

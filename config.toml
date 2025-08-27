@@ -3,10 +3,10 @@ ws_bind = "0.0.0.0:8080"
 
 # 抓包模式（支持 "pcap" 或 "af_xdp"）
 capture_mode = "pcap"
-
+ capture_iface="en0"
 # 目标 IP（用于动态选择抓包网卡）
-target_ip = "192.168.1.1"
-
+target_ip = "192.168.0.113"
+capture_ports = [80, 443, 8080, 8443]
 # IP 限流配置
 [ip_rate_limit]
 enabled = true

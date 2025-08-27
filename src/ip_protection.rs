@@ -1,6 +1,5 @@
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::AsyncReadExt;
 use tokio::task;
 use tracing::{debug, info, warn};
 use crate::config::Config;
@@ -29,10 +28,10 @@ impl IPProtectionService {
     pub fn new(config: Config, metrics: Arc<Metrics>) -> Self {
         let analyzer = Arc::new(Analyzer::new());
         let rate_limiter = Arc::new(IPRateLimiter::new(
-            config.ip_rate_limit.threshold, 
-            config.ip_rate_limit.threshold
+            config.ip_rate_limit.threshold,
+            config.ip_rate_limit.block_threshold,
         ));
-        
+
         Self {
             analyzer,
             rate_limiter,
@@ -40,29 +39,23 @@ impl IPProtectionService {
             config,
         }
     }
-    
+
     /// 启动IP保护服务
     pub async fn start(self: Arc<Self>) {
+        let check_interval = Duration::from_secs(self.config.ip_rate_limit.check_interval);
+
         // 启动定期清理任务
-        let cleanup_analyzer = self.analyzer.clone();
-        let cleanup_limiter = self.rate_limiter.clone();
-        let cleanup_interval = self.config.ip_rate_limit.check_interval;
-        
+        let cleanup_service = self.clone();
         task::spawn(async move {
-            let mut interval = tokio::time::interval(cleanup_interval);
+            let mut interval = tokio::time::interval(check_interval);
             loop {
                 interval.tick().await;
-                
-                // 清理过期的IP统计
-                cleanup_analyzer.cleanup().await;
-                cleanup_limiter.cleanup().await;
+                cleanup_service.cleanup().await;
             }
         });
-        
+
         // 启动流量检查任务
         let check_service = self.clone();
-        let check_interval = self.config.ip_rate_limit.check_interval;
-        
         task::spawn(async move {
             let mut interval = tokio::time::interval(check_interval);
             loop {
@@ -70,29 +63,37 @@ impl IPProtectionService {
                 check_service.check_ip_traffic().await;
             }
         });
-        
-        info!("IP保护服务已启动，限流阈值: {} PPS，拒绝阈值: {} PPS", 
-              self.config.ip_rate_limit.threshold, 
-              self.config.ip_rate_limit.block_threshold);
+
+        info!(
+            "IP保护服务已启动，限流阈值: {} PPS，拒绝阈值: {} PPS",
+            self.config.ip_rate_limit.threshold,
+            self.config.ip_rate_limit.block_threshold
+        );
     }
-    
+
+    /// 定期清理过期的IP统计信息
+    async fn cleanup(&self) {
+        self.analyzer.cleanup().await;
+        self.rate_limiter.cleanup().await;
+    }
+
     /// 处理单个IP的数据包
     pub async fn handle_packet(&self, ft: &FiveTuple, packet_size: u64) -> IPProtectionResult {
         // 如果IP限流未启用，直接允许通过
         if !self.config.ip_rate_limit.enabled {
             return IPProtectionResult::Allow;
         }
-        
+
         // 检查IP是否被拒绝
         if self.analyzer.is_ip_blocked(&ft.src_ip).await {
             self.metrics.dropped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             debug!("拒绝来自被阻止IP的数据包: {}", ft.src_ip);
             return IPProtectionResult::Block;
         }
-        
+
         // 更新IP流量统计
         self.analyzer.update(ft, packet_size).await;
-        
+
         // 检查是否超过限流阈值
         match self.rate_limiter.check(&ft.src_ip, 1).await {
             true => IPProtectionResult::Allow,
@@ -103,43 +104,41 @@ impl IPProtectionService {
             }
         }
     }
+
     /// 定期检查IP流量，识别可能的攻击行为
-async fn check_ip_traffic(&self) {
-    let now = std::time::Instant::now();
+    async fn check_ip_traffic(&self) {
+        let now = std::time::Instant::now();
 
-    // 使用 DashMap 的迭代器直接遍历
-    for entry in self.analyzer.ip_stats.iter() {
-        let ip = entry.key(); // 获取 IP 地址
-        let stat = entry.value(); // 获取对应的统计信息
+        for entry in self.analyzer.ip_stats.iter() {
+            let ip = entry.key(); // 获取 IP 地址
+            let stat = entry.value(); // 获取对应的统计信息
 
-        // 计算每秒数据包数
-        let duration = now.duration_since(stat.last_update);
-        let seconds = duration.as_secs_f64().max(1.0);
-        let pps = (stat.packet_count as f64 / seconds) as u64;
+            // 计算每秒数据包数
+            let duration = now.duration_since(stat.last_update);
+            let seconds = duration.as_secs_f64().max(1.0);
+            let pps = (stat.packet_count as f64 / seconds) as u64;
 
-        // 如果超过拒绝阈值且未被阻止，执行阻止操作
-        if pps >= self.config.ip_rate_limit.block_threshold && !stat.is_blocked {
-            warn!(
-                "检测到异常流量，IP: {}, PPS: {}，已超出拒绝阈值: {}",
-                ip,
-                pps,
-                self.config.ip_rate_limit.block_threshold
-            );
+            // 如果超过拒绝阈值且未被阻止，执行阻止操作
+            if pps >= self.config.ip_rate_limit.block_threshold && !stat.is_blocked {
+                warn!(
+                    "检测到异常流量，IP: {}, PPS: {}，已超出拒绝阈值: {}",
+                    ip,
+                    pps,
+                    self.config.ip_rate_limit.block_threshold
+                );
 
-            // 在另一个任务中执行阻止操作，避免长时间持有读锁
-            let analyzer = self.analyzer.clone();
-            let ip_clone = ip.to_string();
-            let duration = self.config.ip_rate_limit.block_duration;
+                let analyzer = self.analyzer.clone();
+                let ip_clone = ip.to_string();
+                let block_duration = Duration::from_secs(self.config.ip_rate_limit.block_duration);
 
-            tokio::task::spawn(async move {
-                analyzer.block_ip(&ip_clone, duration).await;
-                info!("已阻止异常IP: {}，持续时间: {:?}", ip_clone, duration);
-            });
+                tokio::task::spawn(async move {
+                    analyzer.block_ip(&ip_clone, block_duration).await;
+                    info!("已阻止异常IP: {}，持续时间: {:?}", ip_clone, block_duration);
+                });
+            }
         }
     }
-}
 
-    
     /// 手动阻止指定IP
     pub async fn manually_block_ip(&self, ip: &str, duration: Duration) {
         self.analyzer.block_ip(ip, duration).await;
@@ -148,15 +147,13 @@ async fn check_ip_traffic(&self) {
 
     /// 手动解除IP阻止
     pub async fn unblock_ip(&self, ip: &str) {
-        // 获取 DashMap 的可变引用
         if let Some(mut stat) = self.analyzer.ip_stats.get_mut(ip) {
-            // 更新状态
             stat.is_blocked = false;
             stat.block_expiry = None;
             info!("已解除IP阻止: {}", ip);
         }
     }
-    
+
     /// 设置特定IP的限流阈值
     pub async fn set_ip_threshold(&self, ip: &str, threshold: u64) {
         self.rate_limiter.set_ip_limit(ip, threshold, threshold).await;

@@ -49,9 +49,8 @@ pub mod pcap {
 
                 // 调用 set_filter 方法时，确保 capture 是可变引用
                 capture
-                    .set_filter(&filter)
+                    .filter(&filter, true)
                     .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("设置BPF过滤器失败: {}", e)))?;
-            }
             }
 
             Ok(Self { driver: capture })
@@ -97,17 +96,22 @@ pub mod af_xdp {
     }
 
     impl Capture for AfXdpCapture {
-        /** 创建AF_XDP抓包器（默认配置：4MB共享内存+队列0） */
-        fn new(iface: &str, _capture_ports: &[u16]) -> io::Result<Self> {
+        /** 创建AF_XDP抓包器（支持端口过滤） */
+        fn new(iface: &str, capture_ports: &[u16]) -> io::Result<Self> {
             let config = Config::new()
                 .ifname(iface)                // 绑定目标网卡
                 .queue_id(0)                  // 接收队列ID
                 .umem_size(32 * 1024 * 1024); // 32MB共享内存
 
             let socket = Socket::new(&config)?;
+            
+            // 将端口数组转换为HashSet，方便快速查找
+            let ports_set: HashSet<u16> = capture_ports.iter().cloned().collect();
+            
             Ok(Self {
                 socket,
                 buffer: vec![0; 1500],
+                capture_ports: ports_set,
             })
         }
 
@@ -117,16 +121,32 @@ pub mod af_xdp {
             loop {
                 match self.socket.recv(&mut self.buffer) {
                     Ok(packet) => {
-                        count += 1;
-                        metrics.pps.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        metrics.bps.fetch_add(packet.len() as u64 * 8, std::sync::atomic::Ordering::Relaxed);
+                        // 解析L3/L4信息
+                        let packet_len = packet.len();
+                        let data = &self.buffer[..packet_len];
+                        
+                        // 检查是否需要端口过滤
+                        if self.capture_ports.is_empty() {
+                            // 没有指定端口，所有数据包都计数
+                            count += 1;
+                            metrics.pps.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            metrics.bps.fetch_add(packet_len as u64 * 8, std::sync::atomic::Ordering::Relaxed);
+                        } else if let Some(tuple) = parser::parse_l3l4(data) {
+                            // 有指定端口，检查数据包的源端口或目标端口是否在指定列表中
+                            if self.capture_ports.contains(&tuple.src_port) || self.capture_ports.contains(&tuple.dst_port) {
+                                count += 1;
+                                metrics.pps.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                metrics.bps.fetch_add(packet_len as u64 * 8, std::sync::atomic::Ordering::Relaxed);
+                            }
+                        }
 
-                        // 解析L3/L4信息并更新QPS指标
-                        if let Some(tuple) = parser::parse_l3l4(&self.buffer[..packet.len()]) {
+                        // 更新QPS指标（针对HTTP流量）
+                        if let Some(tuple) = parser::parse_l3l4(data) {
                             if tuple.proto == "TCP" && (tuple.dst_port == 80 || tuple.dst_port == 443) {
                                 metrics.qps.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             }
                         }
+                        
                         self.socket.release_rx_buffer(packet.desc())?;
                     }
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,

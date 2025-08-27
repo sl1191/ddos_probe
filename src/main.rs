@@ -17,7 +17,6 @@ use tracing::{debug, error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 // 导入抓包器接口
-extern crate pcap;
 use crate::packet_capture::Capture;
 use crate::packet_capture::pcap::PcapCapture;
 use crate::ip_protection::IPProtectionService;
@@ -29,10 +28,11 @@ async fn main() -> anyhow::Result<()> {
     init_logging();
 
     // 2. 加载配置并初始化全局状态
-    let cfg = config::Config::load(None);
+    let cfg = config::Config::load();
     info!("加载配置: {:?}", cfg);
 
-    let capture_iface = select_capture_interface(&cfg.target_ip);
+    let ip:IpAddr = IpAddr::from_str(&cfg.target_ip.clone().to_string()).unwrap();
+    let capture_iface = select_capture_interface(&ip);
     let metrics = Arc::new(flow_analyzer::metrics::Metrics::new());
     let ip_protection = Arc::new(IPProtectionService::new(cfg.clone(), metrics.clone()));
 

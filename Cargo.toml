@@ -7,10 +7,6 @@ edition = "2021"
 name = "ddos_probe"
 path = "src/main.rs"
 
-[[bin]]
-name = "test_rangeset"
-path = "src/test_rangeset.rs"
-
 # 特性开关：开发用pcap，生产用AF_XDP
 [features]
 default = ["pcap"]  # 默认开发环境（启用pcap抓包）
@@ -18,6 +14,7 @@ pcap = ["dep:pcap"]  # pcap抓包特性（依赖pcap库）
 af_xdp = ["dep:afxdp"]  # AF_XDP抓包特性（依赖afxdp库，生产环境用）
 
 [dependencies]
+toml = "0.9.5"
 # === 异步运行时 ===
 tokio = { version = "1.47.1", features = ["full"] }  # 异步运行时核心（含任务调度、定时器等）
 

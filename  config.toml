@@ -1,0 +1,16 @@
+# WebSocket 服务绑定地址
+ws_bind = "0.0.0.0:8080"
+
+# 抓包模式（支持 "pcap" 或 "af_xdp"）
+capture_mode = "pcap"
+
+# 目标 IP（用于动态选择抓包网卡）
+target_ip = "192.168.1.1"
+
+# IP 限流配置
+[ip_rate_limit]
+enabled = true
+threshold = 1000          # 每秒数据包数阈值
+block_threshold = 5000    # 拒绝阈值（每秒数据包数）
+block_duration = 60       # 拒绝持续时间（秒）
+check_interval = 1        # 检查间隔（秒）

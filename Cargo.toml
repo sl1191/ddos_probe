@@ -3,6 +3,14 @@ name = "ddos_probe"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "ddos_probe"
+path = "src/main.rs"
+
+[[bin]]
+name = "test_rangeset"
+path = "src/test_rangeset.rs"
+
 # 特性开关：开发用pcap，生产用AF_XDP
 [features]
 default = ["pcap"]  # 默认开发环境（启用pcap抓包）
@@ -25,6 +33,7 @@ serde_json = "1.0.143"  # JSON格式处理（WebSocket消息生成）
 arc-swap = "1.7.1"  # 原子化Arc切换（规则引擎动态更新）
 dashmap = "5.5.3"  # 并发HashMap（流量统计临时存储）
 parking_lot = "0.12.1"  # 高性能锁（可选，替换标准库Mutex）
+rangemap = "1.6.0"  # 范围映射（高效管理端口范围）
 
 # === 日志与调试 ===
 tracing = "0.1.41"  # 日志抽象层

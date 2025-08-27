@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::AsyncReadExt;
 use tokio::task;
 use tracing::{debug, info, warn};
 use crate::config::Config;
@@ -102,46 +103,54 @@ impl IPProtectionService {
             }
         }
     }
-    
     /// 定期检查IP流量，识别可能的攻击行为
-    async fn check_ip_traffic(&self) {
-        let stats = self.analyzer.ip_stats.read().await;
-        let now = std::time::Instant::now();
-        
-        for (ip, stat) in stats.iter() {
-            // 计算每秒数据包数
-            let duration = now.duration_since(stat.last_update);
-            let seconds = duration.as_secs_f64().max(1.0);
-            let pps = (stat.packet_count as f64 / seconds) as u64;
-            
-            // 如果超过拒绝阈值，阻止该IP
-            if pps >= self.config.ip_rate_limit.block_threshold && !stat.is_blocked {
-                warn!("检测到异常流量，IP: {}, PPS: {}，已超出拒绝阈值: {}", 
-                      ip, pps, self.config.ip_rate_limit.block_threshold);
-                
-                // 在另一个任务中执行阻止操作，避免长时间持有读锁
-                let analyzer = self.analyzer.clone();
-                let ip_clone = ip.clone();
-                let duration = self.config.ip_rate_limit.block_duration;
-                
-                task::spawn(async move {
-                    analyzer.block_ip(&ip_clone, duration).await;
-                    info!("已阻止异常IP: {}，持续时间: {:?}", ip_clone, duration);
-                });
-            }
+async fn check_ip_traffic(&self) {
+    let now = std::time::Instant::now();
+
+    // 使用 DashMap 的迭代器直接遍历
+    for entry in self.analyzer.ip_stats.iter() {
+        let ip = entry.key(); // 获取 IP 地址
+        let stat = entry.value(); // 获取对应的统计信息
+
+        // 计算每秒数据包数
+        let duration = now.duration_since(stat.last_update);
+        let seconds = duration.as_secs_f64().max(1.0);
+        let pps = (stat.packet_count as f64 / seconds) as u64;
+
+        // 如果超过拒绝阈值且未被阻止，执行阻止操作
+        if pps >= self.config.ip_rate_limit.block_threshold && !stat.is_blocked {
+            warn!(
+                "检测到异常流量，IP: {}, PPS: {}，已超出拒绝阈值: {}",
+                ip,
+                pps,
+                self.config.ip_rate_limit.block_threshold
+            );
+
+            // 在另一个任务中执行阻止操作，避免长时间持有读锁
+            let analyzer = self.analyzer.clone();
+            let ip_clone = ip.to_string();
+            let duration = self.config.ip_rate_limit.block_duration;
+
+            tokio::task::spawn(async move {
+                analyzer.block_ip(&ip_clone, duration).await;
+                info!("已阻止异常IP: {}，持续时间: {:?}", ip_clone, duration);
+            });
         }
     }
+}
+
     
     /// 手动阻止指定IP
     pub async fn manually_block_ip(&self, ip: &str, duration: Duration) {
         self.analyzer.block_ip(ip, duration).await;
         info!("手动阻止IP: {}，持续时间: {:?}", ip, duration);
     }
-    
+
     /// 手动解除IP阻止
     pub async fn unblock_ip(&self, ip: &str) {
-        let mut stats = self.analyzer.ip_stats.write().await;
-        if let Some(stat) = stats.get_mut(ip) {
+        // 获取 DashMap 的可变引用
+        if let Some(mut stat) = self.analyzer.ip_stats.get_mut(ip) {
+            // 更新状态
             stat.is_blocked = false;
             stat.block_expiry = None;
             info!("已解除IP阻止: {}", ip);
